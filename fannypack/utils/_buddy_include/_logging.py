@@ -151,6 +151,29 @@ class _BuddyLogging(abc.ABC):
         optimizer_steps = cast("_BuddyOptimizer", self).optimizer_steps
         self.log_writer.add_scalar(name, value, global_step=optimizer_steps)
 
+    def log_gradient_norm(self, scope: str = "grad_norm") -> None:
+        """Logging model gradient norm
+        
+        Naming: with `scope` set to "grad_norm", a parameter name "model.Linear.bias" will be
+        logged to the tag `buddy.log_scope_prefix("grad_norm/model/Linear/bias")`.
+
+        Args:
+            scope (str, optional): Scope to log gradients into. Defaults to "grad_norm"
+        """
+        optimizer_steps = cast("_BuddyOptimizer", self).optimizer_steps
+
+        with self.log_scope(scope):
+            for param_name, p in cast("Buddy", self).model.named_parameters():
+                if p.grad is None:
+                    continue
+
+                param_name = param_name.replace(".", "/")
+                self.log_writer.add_scalar(
+                    self.log_scope_prefix(param_name),
+                    p.grad.data.norm(2).item(),
+                    optimizer_steps,
+            )
+
     def log_parameters_histogram(
         self, scope: str = "weights", *, ignore_zero_grad: bool = True
     ) -> None:

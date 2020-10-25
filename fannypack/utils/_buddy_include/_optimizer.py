@@ -22,6 +22,8 @@ class _BuddyOptimizer(abc.ABC):
         "adadelta": torch.optim.Adadelta,
     }
 
+    _OPTIMIZER_DEFAULT_GRADIENT_NORM_MAX: float = 2.0
+
     def __init__(
         self, optimizer_type: str, optimizer_checkpoint_interval: float
     ) -> None:
@@ -46,6 +48,8 @@ class _BuddyOptimizer(abc.ABC):
             Union[float, Callable[[int], float]]
         ] = None
 
+        self.gradient_norm_max = self._OPTIMIZER_DEFAULT_GRADIENT_NORM_MAX
+
     def minimize(
         self,
         loss: torch.Tensor,
@@ -68,7 +72,10 @@ class _BuddyOptimizer(abc.ABC):
 
         # Take gradient step
         self._optimizer_dict[optimizer_name].zero_grad()
-        loss.backward(retain_graph=retain_graph)  # type: ignore
+        loss.backward(retain_graph=retain_graph)  # type:
+        cast("Buddy", self).model.parameters()
+        if self.gradient_norm_max is not None and self.gradient_norm_max > 0:
+            torch.nn.utils.clip_grad_norm_(cast("Buddy", self).model.parameters(), self.gradient_norm_max, norm_type=2)
         self._optimizer_dict[optimizer_name].step()
 
         # Update global step count
@@ -109,6 +116,20 @@ class _BuddyOptimizer(abc.ABC):
         assert len(optimizer.param_groups) == 1
         return optimizer.param_groups[0]["lr"]
 
+    def set_regularization_weight(
+        self,
+        value: float,
+        optimizer_name: str = "primary",
+    ) -> None:
+        """Sets an optimizer regularization weight. Accepts either a floating point
+        learning rate
+        """
+        assert cast("Buddy", self)._model is not None, "No model attached!"
+        self._instantiate_optimizer(optimizer_name)
+        assert isinstance(value, float)
+        # Set regularization weight
+        self._set_regularization_weight(value, optimizer_name)
+
     def set_learning_rate(
         self,
         value: Union[float, Callable[[int], float]],
@@ -144,6 +165,12 @@ class _BuddyOptimizer(abc.ABC):
         """Sets a default learning rate for new optimizers."""
         self._optimizer_default_learning_rate = value
 
+    def set_gradient_norm_max(self, value: float) -> None:
+        """Sets gradient norm max for gradient clipping"""
+
+        # todo: sets it for specific optimizer instead of every one
+        self.gradient_norm_max = value
+
     @property
     def optimizer_steps(self) -> int:
         """Read-only interface for # of steps taken by optimizer."""
@@ -158,6 +185,18 @@ class _BuddyOptimizer(abc.ABC):
         optimizer = self._optimizer_dict[optimizer_name]
         assert len(optimizer.param_groups) == 1
         optimizer.param_groups[0]["lr"] = value
+
+    def _set_regularization_weight(self, value: float, optimizer_name: str) -> None:
+        """(Private) Sets an optimizer's l2 regularization weight.
+        """
+
+        self._instantiate_optimizer(optimizer_name)
+
+        # Currently, only one parameter group is supported
+        optimizer = self._optimizer_dict[optimizer_name]
+        assert len(optimizer.param_groups) == 1
+        optimizer.param_groups[0]["weight_decay"] = value
+
 
     def _instantiate_optimizer(self, optimizer_name: str) -> None:
         """(Private) Instantiates an optimizer. Returns immediately if
